@@ -42,6 +42,12 @@ def create_handshake(protocol, info_hash, peer_id):
   return pstr_len + pstr + reserved + ih + pi
 
 
+def receive_full_handshake(conn):
+
+  inf = receive_infohash(conn)
+  peer_id = receive_peer_id(conn)
+
+
 def receive_infohash(conn):
 
   # Recieve the length of the protocol string
@@ -61,15 +67,15 @@ def receive_infohash(conn):
   }
 
 
-def send_handshake_reply(conn, info_hash, peer_id):
+def send_handshake_reply(conn, info_hash, this_peer_id):
 
-  assert(len(info_hash) == 20 and len(peer_id) == 20)
+  assert(len(info_hash) == 20 and len(this_peer_id) == 20)
 
   pstr = b'BitTorrent protocol'
   pstr_len = len(pstr).to_bytes(1, 'big')
   reserved = bytes(8)
 
-  conn.send(pstr_len + pstr + reserved + info_hash + peer_id)
+  conn.send(pstr_len + pstr + reserved + info_hash + this_peer_id)
 
 
 def receive_peer_id(conn):
@@ -132,49 +138,3 @@ def parse_next_message(conn):
 
   return resp
 
-
-def handle_incoming(conn, my_peer_id):
-
-  # State of this peer
-  am_choking = 1
-  am_interested = 0
-  peer_choking = 1
-  peer_interested = 0
-
-  try:
-    d = receive_infohash(conn)
-  except e:
-    return
-
-  # Send our handshake
-  send_handshake_reply(conn, d['info_hash'], b'1' * 20)
-
-  # Receive the peer's peer_id
-  receive_peer_id(conn)
-
-  pass
-
-
-def start(port):
-
-  # Create socket for TCP communication
-  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-  # Bind socket to a local port
-  try:
-    s.bind(port)
-  except socket.error as e:
-    print('Socket Bind Failed: ' + e)
-
-  # Begin listening on socket
-  s.listen(8)
-
-  while True:
-    # Accept a connection
-    conn, addr = s.accept()
-
-    # Handle the connection in its own thread
-    t = threading.Thread(target=handle_incoming, args=(conn,))
-
-    #Start the thread
-    t.start()

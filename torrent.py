@@ -1,9 +1,12 @@
 import hashlib
 import datetime
 
+def read_torrent(file_name):
+  pass
+
 def create_torrent(file_name, comment):
 
-  piece_length = 262144
+  piece_length = 2 ** 18
   hash_list = []
   file_length  = 0
 

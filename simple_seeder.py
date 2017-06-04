@@ -1,4 +1,4 @@
-import sys, socket, threading
+import sys, os, socket, threading
 
 # Project
 import torrent, pwp
@@ -6,7 +6,9 @@ import torrent, pwp
 
 def handle_incoming(conn, my_peer_id):
 
-  print('Entering thread for {}'.format(conn.getpeername()))
+  peer_info = conn.getpeername()
+
+  print('Connected to {}:{}'.format(peer_info[0], peer_info[1]))
 
   # State of this peer
   am_choking = 1
@@ -28,10 +30,12 @@ def handle_incoming(conn, my_peer_id):
   # Receive the peer's peer_id
   d['peer_id'] = pwp.receive_peer_id(conn)
 
-  print('Handshake with {} complete'.format(conn.getpeername()))
+  print('Completed handshake with {}:{}'.format(peer_info[0], peer_info[1]))
 
   # Close the connection
   conn.close()
+
+  print('Closed connection to {}:{}'.format(peer_info[0], peer_info[1]), end='\n\n')
 
 
 def start(port, my_peer_id):
@@ -47,6 +51,17 @@ def start(port, my_peer_id):
 
   # Begin listening on socket
   s.listen(8)
+
+  # A dictionary of all the infohashes we are seeding
+  torrs = dict()
+
+  # Get infohash of all files in the torrents/ directory
+  for (dirpath, dirnames, filenames) in os.walk('torrents'):
+    for filename in filenames:
+      torr_info = torrent.read_torrent_file(dirpath + '/' + filename)
+      torrs[torrent.infohash_hex(torr_info)] = torr_info['info']['name']
+
+  print('Serving...\n' + '\n'.join(hexhash + ' ' + name for hexhash, name in torrs.items()))
 
   while True:
     # Accept a connection

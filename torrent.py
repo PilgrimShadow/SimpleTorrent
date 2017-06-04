@@ -3,16 +3,17 @@ import datetime
 
 
 def parse_bencode(byts, start=0):
+  '''Parse a bencoded bytestring'''
 
   pos = start
 
-  if byts[pos: pos+1] == b'i':
+  if byts[pos] == ord('i'):
     pos += 1
 
     while byts[pos: pos+1].isdigit():
       pos += 1
 
-    if byts[pos: pos+1] != b'e':
+    if byts[pos] != ord('e'):
       raise Exception('Invalid bencoding of integer (no terminating e)')
 
     # Skip the trailing 'e'
@@ -28,7 +29,7 @@ def parse_bencode(byts, start=0):
       raw_len += byts[pos:pos+1]
       pos += 1
 
-    if byts[pos:pos+1] != b':':
+    if byts[pos] != ord(':'):
       raise Exception('Invalid bencoding of string (missing colon after length)')
 
     pos += 1
@@ -38,21 +39,21 @@ def parse_bencode(byts, start=0):
     
     return res, pos
 
-  elif byts[pos:pos+1] == b'l':
+  elif byts[pos] == ord('l'):
     res = []
     pos += 1
 
-    while byts[pos:pos+1] != b'e':
+    while byts[pos] != ord('e'):
       item, pos = parse_bencode(byts, pos)
       res.append(item)
 
     return res, pos + 1
 
-  elif byts[pos:pos+1] == b'd':
+  elif byts[pos] == ord('d'):
     res = dict()
     pos += 1
 
-    while byts[pos:pos+1] != b'e':
+    while byts[pos] != ord('e'):
       raw_key, pos = parse_bencode(byts, pos)
       value, pos = parse_bencode(byts, pos)
       if raw_key.decode() in {'announce', 'comment', 'created by', 'encoding', 'name'}:
@@ -63,12 +64,15 @@ def parse_bencode(byts, start=0):
     return res, pos + 1
 
 
+def infohash_hex(torr_dict):
+  '''Return the infohash of a torrent as a hexstring'''
+  return hashlib.sha1(bencode(torr_dict['info'])).hexdigest()
+
+
 def infohash(torr_dict):
-  '''Compute the infohash of a torrent'''
+  '''Return the infohash of a torrent as a bytestring'''
 
-  benc = bencode(torr_dict['info'])
-
-  return hashlib.sha1(benc).digest()
+  return bytes.fromhex(infohash_hex(torr_dict))
 
 
 def read_torrent_file(file_name):
@@ -142,13 +146,13 @@ def bencode(data):
     raise Exception('Invalid data type encountered: {}'.format(data))
 
 
-def create_torrent_file(input_file, output_file):
+def create_torrent_file(input_file):
   '''Create a torrent file for the given input file.'''
 
   t = create_torrent(input_file)
-  fn = output_file if output_file.endswith('.torrent') else output_file + '.torrent'
+  output_file = input_file.split('/')[-1] + '.torrent'
 
-  with open(fn, 'bw') as f:
+  with open(output_file, 'bw') as f:
     f.write(bencode(t))
 
 

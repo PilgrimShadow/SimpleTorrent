@@ -21,7 +21,7 @@ def generate_peer_id():
   pass
 
 
-def create_handshake(protocol, info_hash, peer_id):
+def create_handshake(info_hash, peer_id, protocol = 'BitTorrent protocol'):
   '''Create the bytestring for a handshake'''
 
   if len(protocol) > 255:
@@ -36,16 +36,16 @@ def create_handshake(protocol, info_hash, peer_id):
   pstr_len = len(protocol).to_bytes(1, 'big')
   pstr = bytes(protocol, 'ascii')
   reserved = b'\x00' * 8
-  ih = bytes(info_hash, 'ascii')
-  pi = bytes(peer_id, 'ascii')
 
-  return pstr_len + pstr + reserved + ih + pi
+  return pstr_len + pstr + reserved + info_hash + peer_id
 
 
 def receive_full_handshake(conn):
 
   inf = receive_infohash(conn)
-  peer_id = receive_peer_id(conn)
+  inf['peer_id'] = receive_peer_id(conn)
+
+  return inf
 
 
 def receive_infohash(conn):
@@ -81,7 +81,7 @@ def send_handshake_reply(conn, info_hash, this_peer_id):
 def receive_peer_id(conn):
 
   peer_id = recv_until(conn, 20)
-  return peer_id.decode()
+  return peer_id
 
 
 def parse_next_message(conn):

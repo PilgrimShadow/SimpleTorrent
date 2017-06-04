@@ -2,60 +2,63 @@ import hashlib
 import datetime
 
 
-def parse_bencode(text, start=0):
+def parse_bencode(byts, start=0):
 
   pos = start
 
-  if text[pos] == 'i':
+  if byts[pos: pos+1] == b'i':
     pos += 1
 
-    while text[pos].isdigit():
+    while byts[pos: pos+1].isdigit():
       pos += 1
 
-    if text[pos] != 'e':
+    if byts[pos: pos+1] != b'e':
       raise Exception('Invalid bencoding of integer (no terminating e)')
 
     # Skip the trailing 'e'
     pos += 1
 
-    return int(text[start+1 : pos-1]), pos
+    return int(byts[start+1 : pos-1].decode()), pos
 
-  elif text[pos].isdigit():
-    raw_len = text[pos]
+  elif byts[pos:pos+1].isdigit():
+    raw_len = byts[pos:pos+1]
     pos += 1
 
-    while text[pos].isdigit():
-      raw_len += text[pos]
+    while byts[pos: pos+1].isdigit():
+      raw_len += byts[pos:pos+1]
       pos += 1
 
-    if text[pos] != ':':
+    if byts[pos:pos+1] != b':':
       raise Exception('Invalid bencoding of string (missing colon after length)')
 
     pos += 1
-    str_len = int(raw_len) 
-    res = text[pos : pos + str_len]
+    str_len = int(raw_len.decode()) 
+    res = byts[pos : pos + str_len]
     pos += str_len
     
     return res, pos
 
-  elif text[pos] == 'l':
+  elif byts[pos:pos+1] == b'l':
     res = []
     pos += 1
 
-    while text[pos] != 'e':
-      item, pos = parse_bencode(text, pos)
+    while byts[pos:pos+1] != b'e':
+      item, pos = parse_bencode(byts, pos)
       res.append(item)
 
     return res, pos + 1
 
-  elif text[pos] == 'd':
+  elif byts[pos:pos+1] == b'd':
     res = dict()
     pos += 1
 
-    while text[pos] != 'e':
-      key, pos = parse_bencode(text, pos)
-      value, pos = parse_bencode(text, pos)
-      res[key] = value
+    while byts[pos:pos+1] != b'e':
+      raw_key, pos = parse_bencode(byts, pos)
+      value, pos = parse_bencode(byts, pos)
+      if raw_key.decode() in {'announce', 'comment', 'created by', 'encoding', 'name'}:
+        res[raw_key.decode()] = value.decode()
+      else:
+        res[raw_key.decode()] = value
 
     return res, pos + 1
 
@@ -63,18 +66,18 @@ def parse_bencode(text, start=0):
 def infohash(torr_dict):
   '''Compute the infohash of a torrent'''
 
-  benc = bytes(bencode(torr_dict['info']), 'ascii')
+  benc = bencode(torr_dict['info'])
 
-  return hashlib.sha1(benc).hexdigest()
+  return hashlib.sha1(benc).digest()
 
 
 def read_torrent_file(file_name):
   '''Read a torrent file'''
 
-  with open(file_name) as f:
-    text = f.read()
+  with open(file_name, 'br') as f:
+    byts = f.read()
 
-  return parse_bencode(text)[0]
+  return parse_bencode(byts)[0]
 
 
 def create_torrent(file_name, piece_length=2**18, comment=''):
@@ -103,14 +106,14 @@ def create_torrent(file_name, piece_length=2**18, comment=''):
     piece = f.read(piece_length)
 
     while len(piece) > 0:
-      hash_list.append(hashlib.sha1(piece).hexdigest())
+      hash_list.append(hashlib.sha1(piece).digest())
       piece = f.read(piece_length)
 
     # The length of the file (in bytes)
     torrent['info']['length'] = f.tell()
 
   # Add the hash list to the dictionary
-  torrent['info']['pieces'] = ''.join(hash_list)
+  torrent['info']['pieces'] = b''.join(hash_list)
 
   # Add the time of creation
   torrent['creation date'] = int(datetime.datetime.now().timestamp())
@@ -126,13 +129,15 @@ def bencode(data):
   ''' 
 
   if isinstance(data, int):
-    return 'i{:d}e'.format(data)
+    return bytes('i{:d}e'.format(data), 'ascii')
   elif isinstance(data, str):
-    return '{:d}:{:s}'.format(len(data), data)
+    return bytes('{:d}:{:s}'.format(len(data), data), 'ascii')
+  elif isinstance(data, bytes):
+    return bytes(str(len(data)), 'ascii') + b':' + data
   elif isinstance(data, list):
-    return 'l' + ''.join(bencode(elem) for elem in data) + 'e'
+    return b'l' + b''.join(bencode(elem) for elem in data) + b'e'
   elif isinstance(data, dict):
-    return 'd' + ''.join(bencode(key) + bencode(value) for key, value in sorted(data.items(), key=lambda item: item[0])) + 'e'
+    return b'd' + b''.join(bencode(key) + bencode(value) for key, value in sorted(data.items(), key=lambda item: item[0])) + b'e'
   else:
     raise Exception('Invalid data type encountered: {}'.format(data))
 
@@ -143,7 +148,7 @@ def create_torrent_file(input_file, output_file):
   t = create_torrent(input_file)
   fn = output_file if output_file.endswith('.torrent') else output_file + '.torrent'
 
-  with open(fn, 'w') as f:
+  with open(fn, 'bw') as f:
     f.write(bencode(t))
 
 

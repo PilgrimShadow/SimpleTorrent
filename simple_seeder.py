@@ -1,3 +1,4 @@
+#!/usr/bin/env python3.6
 '''A simple torrent seeder
 
 A multi-threaded server that seeds torrents
@@ -107,8 +108,9 @@ def start(port, my_peer_id):
   # Get infohash of all files in the torrents/ directory
   for (dirpath, dirnames, filenames) in os.walk('torrents'):
     for filename in filenames:
-      torr_info = torrent.read_torrent_file(dirpath + '/' + filename)
-      torrs[torrent.infohash(torr_info)] = torr_info
+      if filename[0] != '.':
+        torr_info = torrent.read_torrent_file(dirpath + '/' + filename)
+        torrs[torrent.infohash(torr_info)] = torr_info
 
   print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()))
 

@@ -1,4 +1,5 @@
-import sys, socket
+#!/usr/bin/env python3.6
+import sys, socket, math, hashlib, time
 
 # Project
 import torrent, pwp
@@ -61,7 +62,12 @@ def main():
   conn.send(req)
 
   blocks_expected = len(req) / 17
+  pieces_expected = int(math.ceil(blocks_expected / 16))
   blocks_received = 0
+
+  pieces = [set() for _ in range(pieces_expected)]
+
+  print('Blocks received: {}'.format(blocks_received), end='')
 
   # Receive messages until file is complete
   while blocks_received < blocks_expected:
@@ -72,12 +78,24 @@ def main():
       break
     elif msg_id == 7:
       blocks_received += 1
-      print('Blocks received: {}'.format(blocks_received))
+      print('\rBlocks received: {}'.format(blocks_received), end='')
 
-      # Save the block
-      with open('pieces/{}_{}_{}'.format(torr_info['info']['name'], msg['payload']['index'], msg['payload']['begin']), 'wb') as f:
-        f.write(msg['payload']['block'])
-      
+      pieces[msg['payload']['index']].add((msg['payload']['begin'], msg['payload']['block']))
+
+  print()
+
+  # Assemble pieces and write to disk
+  with open('{}'.format(torr_info['info']['name']), 'wb') as f:
+    for index, piece in enumerate(pieces):
+
+      assembled = b''.join(block[1] for block in sorted(piece))
+
+      if hashlib.sha1(assembled).digest() == torr_info['info']['pieces'][20 * index: 20 * (index+1)]:
+        f.write(assembled)
+      else:
+        f.write(bytes(len(assembled)))
+        print('Piece {} is invalid. Writing zeros instead.'.format(index))
+
 
 if __name__ == '__main__':
   main()

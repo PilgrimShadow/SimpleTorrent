@@ -124,7 +124,7 @@ def port(listen_port):
 def request_all(file_size):
   piece_size = 2**18
   block_size = 2**14
-  blocks_per_piece = piece_size / block_size
+  blocks_per_piece = 16
   num_whole_pieces = file_size // piece_size
 
   # The number of whole blocks in the last piece

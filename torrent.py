@@ -146,11 +146,11 @@ def bencode(data):
     raise Exception('Invalid data type encountered: {}'.format(data))
 
 
-def create_torrent_file(input_file):
+def create_torrent_file(input_file, save_dir='torrents'):
   '''Create a torrent file for the given input file.'''
 
   t = create_torrent(input_file)
-  output_file = input_file.split('/')[-1] + '.torrent'
+  output_file = '{}/{}.torrent'.format(save_dir, input_file.split('/')[-1])
 
   with open(output_file, 'bw') as f:
     f.write(bencode(t))

@@ -53,6 +53,31 @@ def main():
 
   print('Handshake success')
 
+  # Indicate that we are interested in receiving pieces
+  conn.send(pwp.interested())
+
+  # Request the entire file
+  req = pwp.request_all(torr_info['info']['length'])
+  conn.send(req)
+
+  blocks_expected = len(req) / 17
+  blocks_received = 0
+
+  # Receive messages until file is complete
+  while blocks_received < blocks_expected:
+    msg = pwp.parse_next_message(conn)
+    msg_id = msg['id']
+
+    if msg_id == -2:
+      break
+    elif msg_id == 7:
+      blocks_received += 1
+      print('Blocks received: {}'.format(blocks_received))
+
+      # Save the block
+      with open('pieces/{}_{}_{}'.format(torr_info['info']['name'], msg['payload']['index'], msg['payload']['begin']), 'wb') as f:
+        f.write(msg['payload']['block'])
+      
 
 if __name__ == '__main__':
   main()

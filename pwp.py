@@ -112,7 +112,7 @@ def request(index, begin, length):
 
 def piece(index, begin, block):
   msg_len = (len(block) + 9).to_bytes(4, 'big')
-  return msg_len + b'\x07' + block
+  return msg_len + b'\x07' + b''.join(x.to_bytes(4, 'big') for x in [index, begin]) + block
 
 def cancel(index, begin, length):
   return b'\x00\x00\x00\x0d\x08' + b''.join(x.to_bytes(4, 'big') for x in [index, begin, length])

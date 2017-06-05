@@ -36,6 +36,8 @@ def handle_incoming(conn, my_peer_id, torrents):
     print('Closed connection to {}:{}'.format(peer_info[0], peer_info[1]), end='\n\n')
     return
 
+  torr_info = torrents[d['info_hash']]
+
   # Send our handshake
   pwp.send_handshake_reply(conn, d['info_hash'], my_peer_id)
 
@@ -44,14 +46,17 @@ def handle_incoming(conn, my_peer_id, torrents):
 
   print('Completed handshake with {}:{}'.format(peer_info[0], peer_info[1]))
 
+  # Open the file
+  f = open('files/' + torr_info['info']['name'], 'rb')
+
   while True:
     msg = pwp.parse_next_message(conn)
     msg_id = msg['id']
 
     if msg_id == -2:
-      break
+      break  # The connection was closed
     elif msg_id == -1:
-      pass
+      pass   # Keep-alive
     elif msg_id == 0:
       peer_choking = 1
     elif msg_id == 1:
@@ -65,6 +70,15 @@ def handle_incoming(conn, my_peer_id, torrents):
     elif msg_id == 5:
       pass
     elif msg_id == 6:
+      offset = (msg['payload']['index'] * (2**18)) + msg['payload']['begin']
+      f.seek(offset)
+      block = f.read(msg['payload']['length'])
+      conn.send(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
+    elif msg_id == 7:
+      pass
+    elif msg_id == 8:
+      pass
+    elif msg_id == 9:
       pass
 
   # Close the connection

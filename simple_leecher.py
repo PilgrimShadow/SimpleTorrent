@@ -64,10 +64,11 @@ def main():
   blocks_expected = len(req) / 17
   pieces_expected = int(math.ceil(blocks_expected / 16))
   blocks_received = 0
+  bytes_received  = 0
 
   pieces = [set() for _ in range(pieces_expected)]
 
-  print('Blocks received: {}'.format(blocks_received), end='')
+  print('Progress: {:.2f}%'.format(100 * bytes_received / torr_info['info']['length']), end='')
 
   # Receive messages until file is complete
   while blocks_received < blocks_expected:
@@ -77,8 +78,19 @@ def main():
     if msg_id == -2:
       break
     elif msg_id == 7:
+
+      if msg['payload']['begin'] % (2**14) != 0:
+        print('Received block with invalid offset')
+        return
+
+      if len(msg['payload']['block']) > 2**14:
+        print('Received block longer than 2**14 bytes')
+        return
+
       blocks_received += 1
-      print('\rBlocks received: {}'.format(blocks_received), end='')
+      bytes_received  += len(msg['payload']['block'])
+
+      print('\rProgress: {:.2f}%'.format(100 * bytes_received / torr_info['info']['length']), end='')
 
       pieces[msg['payload']['index']].add((msg['payload']['begin'], msg['payload']['block']))
 

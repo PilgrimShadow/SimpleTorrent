@@ -5,7 +5,7 @@ A multi-threaded server that seeds torrents
 '''
 
 # Stdlib
-import sys, os, socket, threading
+import sys, os, socket, threading, time
 
 # Project
 import torrent, pwp
@@ -75,6 +75,9 @@ def handle_incoming(conn, my_peer_id, torrents):
       f.seek(offset)
       block = f.read(msg['payload']['length'])
       conn.send(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
+
+      # Testing
+      time.sleep(0.01)
     elif msg_id == 7:
       pass
     elif msg_id == 8:
@@ -112,7 +115,7 @@ def start(port, my_peer_id):
         torr_info = torrent.read_torrent_file(dirpath + '/' + filename)
         torrs[torrent.infohash(torr_info)] = torr_info
 
-  print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()))
+  print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()), end='\n\n')
 
   while True:
     # Accept a connection

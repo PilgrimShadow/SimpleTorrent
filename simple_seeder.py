@@ -1,3 +1,8 @@
+'''A simple torrent seeder
+
+'''
+
+# Stdlib
 import sys, os, socket, threading
 
 # Project

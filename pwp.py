@@ -1,3 +1,9 @@
+'''Peer Wire Protocol
+
+'''
+
+
+# Stdlib
 import socket, struct, threading
 
 
@@ -42,10 +48,10 @@ def create_handshake(info_hash, peer_id, protocol = 'BitTorrent protocol'):
 
 def receive_full_handshake(conn):
 
-  inf = receive_infohash(conn)
-  inf['peer_id'] = receive_peer_id(conn)
+  ihash = receive_infohash(conn)
+  ihash['peer_id'] = receive_peer_id(conn)
 
-  return inf
+  return ihash
 
 
 def receive_infohash(conn):
@@ -83,11 +89,68 @@ def receive_peer_id(conn):
   peer_id = recv_until(conn, 20)
   return peer_id
 
+def keep_alive():
+  return b'\x00\x00\x00\x00'
+
+def choke():
+  return b'\x00\x00\x00\x01\x00'
+
+def unchoke():
+  return b'\x00\x00\x00\x01\x01'
+
+def interested():
+  return b'\x00\x00\x00\x01\x02'
+
+def uninterested():
+  return b'\x00\x00\x00\x01\x03'
+  
+def have(index):
+  return b'\x00\x00\x00\x05\x04' + index.to_bytes(4, 'big')
+
+def request(index, begin, length):
+  return b'\x00\x00\x00\x0d\x06' + b''.join(x.to_bytes(4, 'big') for x in [index, begin, length])
+
+def piece(index, begin, block):
+  msg_len = (len(block) + 9).to_bytes(4, 'big')
+  return msg_len + b'\x07' + block
+
+def cancel(index, begin, length):
+  return b'\x00\x00\x00\x0d\x08' + b''.join(x.to_bytes(4, 'big') for x in [index, begin, length])
+
+def port(listen_port):
+  return b'\x00\x00\x00\x03\x09' + listen_port.to_bytes(2, 'big')
+
+
+def request_all(file_size):
+  piece_size = 2**18
+  block_size = 2**14
+  blocks_per_piece = piece_size / block_size
+  num_whole_pieces = file_size // piece_size
+
+  # The number of whole blocks in the last piece
+  rem_blocks = (file_size % piece_size) // block_size
+
+  # The size of the last block
+  last_block = file_size % block_size
+
+  if rem_blocks > 0:
+    t = b''.join(request(num_whole_pieces, j*block_size, block_size) for j in range(rem_blocks))
+  else:
+    t = b''
+
+  if last_block > 0:
+    v = request(num_whole_pieces, rem_blocks*block_size, last_block)
+  else:
+    v = b''
+
+  return b''.join( request(i, j*block_size, block_size) for i in range(num_whole_pieces) for j in range(blocks_per_piece) ) + t + v
+
+  
 
 def parse_next_message(conn):
   '''Parse the next message received from a peer'''
 
-  resp = {'id': 0, 'name': '', 'payload': ''}
+  resp = {'id': -1, 'name': '', 'payload': ''}
 
   # Get the length of the next message
   len_prefix = conn.recv(4)

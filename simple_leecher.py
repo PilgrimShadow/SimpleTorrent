@@ -26,9 +26,8 @@ def main():
   torr_info = torrent.read_torrent_file(torr_file)
 
   # Compute the infohash for the given torrent
-  hexhash = torrent.infohash_hex(torr_info)
-  bytehash = bytes.fromhex(hexhash)
-  print('infohash:', hexhash)
+  bytehash = torrent.infohash(torr_info)
+  print('infohash:', bytehash.hex())
 
   # Create a socket object
   conn = socket.socket()

@@ -150,13 +150,19 @@ def request_all(file_size):
 def parse_next_message(conn):
   '''Parse the next message received from a peer'''
 
-  resp = {'id': -1, 'name': '', 'payload': ''}
+  resp = {'id': -2, 'name': '', 'payload': ''}
 
   # Get the length of the next message
   len_prefix = conn.recv(4)
+
+  # Check if connection is closed
+  if len(len_prefix) == 0:
+    return resp
+
   msg_len = struct.unpack('>I', len_prefix)[0]
 
   if msg_len == 0:
+    resp['id'] = -1
     resp['name'] = 'keep-alive'
     return resp
 

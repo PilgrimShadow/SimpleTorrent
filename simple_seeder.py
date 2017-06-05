@@ -1,5 +1,6 @@
 '''A simple torrent seeder
 
+A multi-threaded server that seeds torrents
 '''
 
 # Stdlib
@@ -9,8 +10,10 @@ import sys, os, socket, threading
 import torrent, pwp
 
 
-def handle_incoming(conn, my_peer_id):
+def handle_incoming(conn, my_peer_id, torrents):
+  '''Function called to handle each incoming connection'''
 
+  # Get address and port of our peer
   peer_info = conn.getpeername()
 
   print('Connected to {}:{}'.format(peer_info[0], peer_info[1]))
@@ -21,21 +24,48 @@ def handle_incoming(conn, my_peer_id):
   peer_choking = 1
   peer_interested = 0
 
-  try:
-    d = pwp.receive_infohash(conn)
-  except e:
-    conn.close()
-    return
+  peer_has = set()
+
+  # Receive the first part of the handshake
+  d = pwp.receive_infohash(conn)
 
   # Check that we have the file specified by the infohash
+  if d['info_hash'] not in torrents.keys():
+    print('{}:{} requested unknown torrent:'.format(peer_info[0], peer_info[1]), d['info_hash'].hex())
+    conn.close()
+    print('Closed connection to {}:{}'.format(peer_info[0], peer_info[1]), end='\n\n')
+    return
 
   # Send our handshake
   pwp.send_handshake_reply(conn, d['info_hash'], my_peer_id)
 
-  # Receive the peer's peer_id
+  # Receive the rest of the handshake (peer_id)
   d['peer_id'] = pwp.receive_peer_id(conn)
 
   print('Completed handshake with {}:{}'.format(peer_info[0], peer_info[1]))
+
+  while True:
+    msg = pwp.parse_next_message(conn)
+    msg_id = msg['id']
+
+    if msg_id == -2:
+      break
+    elif msg_id == -1:
+      pass
+    elif msg_id == 0:
+      peer_choking = 1
+    elif msg_id == 1:
+      peer_choking = 0
+    elif msg_id == 2:
+      peer_interested = 1
+    elif msg_id == 3:
+      peer_interested = 0
+    elif msg_id == 4:
+      peer_has.add(msg['payload'])
+    elif msg_id == 5:
+      pass
+    elif msg_id == 6:
+      pass
 
   # Close the connection
   conn.close()
@@ -64,16 +94,16 @@ def start(port, my_peer_id):
   for (dirpath, dirnames, filenames) in os.walk('torrents'):
     for filename in filenames:
       torr_info = torrent.read_torrent_file(dirpath + '/' + filename)
-      torrs[torrent.infohash_hex(torr_info)] = torr_info['info']['name']
+      torrs[torrent.infohash(torr_info)] = torr_info
 
-  print('Serving...\n' + '\n'.join(hexhash + ' ' + name for hexhash, name in torrs.items()))
+  print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()))
 
   while True:
     # Accept a connection
     conn, addr = s.accept()
 
     # Handle the connection in its own thread
-    t = threading.Thread(target=handle_incoming, args=(conn, my_peer_id))
+    t = threading.Thread(target=handle_incoming, args=(conn, my_peer_id, torrs))
 
     #Start the thread
     t.start()

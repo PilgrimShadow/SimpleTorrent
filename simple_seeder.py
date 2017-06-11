@@ -50,7 +50,12 @@ def handle_incoming(conn, my_peer_id, torrents):
   # Open the file
   f = open('files/' + torr_info['info']['name'], 'rb')
 
+  # Get the length of the file
+  file_len = f.seek(0, 2)
+
   while True:
+
+    # Receive and parse the next message
     msg = pwp.parse_next_message(conn)
     msg_id = msg['id']
 
@@ -71,13 +76,23 @@ def handle_incoming(conn, my_peer_id, torrents):
     elif msg_id == 5:
       pass
     elif msg_id == 6:
+
+      # Compute the byte-offset of this block within the file
       offset = (msg['payload']['index'] * (2**18)) + msg['payload']['begin']
+
+      # Check that the block is valid
+      if offset + msg['payload']['length'] > file_len:
+        print('{}:{} requested invalid block (overflow)'.format(peer_info[0], peer_info[1]))
+        break
+
       f.seek(offset)
+
+      # Read the requested block
       block = f.read(msg['payload']['length'])
+
+      # Send the requested block
       conn.send(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
 
-      # Testing
-      time.sleep(0.01)
     elif msg_id == 7:
       pass
     elif msg_id == 8:

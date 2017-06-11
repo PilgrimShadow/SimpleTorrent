@@ -1,7 +1,10 @@
 #!/usr/bin/env python3.6
 
-import torrent
+# Stdlib
 import sys, os
+
+# Project
+import torrent
 
 def main():
 
@@ -13,8 +16,14 @@ def main():
       peers.append((ip, int(raw_port)))
 
   if sys.argv[1] == 'add':
+
+    # Get the pathless filename
     file_name = sys.argv[2].split('/')[-1]
+
+    # Create a torrent for the new file
     torrent.create_torrent_file(sys.argv[2])
+
+    # Link the file into the local files/ directory
     os.link(sys.argv[2], 'files/' + file_name)
     
 

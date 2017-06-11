@@ -30,6 +30,8 @@ def main():
   bytehash = torrent.infohash(torr_info)
   print('infohash:', bytehash.hex())
 
+  # TODO: Check for a partial download
+
   # Create a socket object
   conn = socket.socket()
 
@@ -42,6 +44,7 @@ def main():
   # Send our handshake
   conn.send(handshake)  
 
+  # Receive handshake from peer
   shake_resp = pwp.receive_full_handshake(conn)
 
   if shake_resp['reserved'] != (b'\x00' * 8):
@@ -63,21 +66,31 @@ def main():
 
   blocks_expected = len(req) / 17
   pieces_expected = int(math.ceil(blocks_expected / 16))
-  blocks_received = 0
+  blocks_in_last_piece = blocks_expected % 16
   bytes_received  = 0
 
-  pieces = [set() for _ in range(pieces_expected)]
+  pieces = {i : set() for i in range(pieces_expected)}
 
   print('Progress: {:.2f}%'.format(100 * bytes_received / torr_info['info']['length']), end='')
 
+  # Create the output file
+  with open('downloads/' + torr_info['info']['name'], 'w'):
+    pass
+
   # Receive messages until file is complete
-  while blocks_received < blocks_expected:
+  while len(pieces) > 0:
+
+    # Receive and parse the next message
     msg = pwp.parse_next_message(conn)
     msg_id = msg['id']
 
     if msg_id == -2:
       break
     elif msg_id == 7:
+
+      if msg['payload']['index'] >= pieces_expected:
+        print('Received block with invalid piece index')
+        return
 
       if msg['payload']['begin'] % (2**14) != 0:
         print('Received block with invalid offset')
@@ -87,26 +100,42 @@ def main():
         print('Received block longer than 2**14 bytes')
         return
 
-      blocks_received += 1
       bytes_received  += len(msg['payload']['block'])
 
+      # Display the download progress
       print('\rProgress: {:.2f}%'.format(100 * bytes_received / torr_info['info']['length']), end='')
 
-      pieces[msg['payload']['index']].add((msg['payload']['begin'], msg['payload']['block']))
+      index = msg['payload']['index']
 
+      # Add the block to our collection
+      pieces[index].add((msg['payload']['begin'], msg['payload']['block']))
+
+      # Assemble the piece if all blocks have arrived
+      if (index == pieces_expected-1 and len(pieces[index]) == blocks_in_last_piece) or len(pieces[index]) == 16:
+
+          offset = index * (2**18)
+          piece = pieces[index]
+          assembled = b''.join(block[1] for block in sorted(piece))
+
+          # If the piece is valid...
+          if hashlib.sha1(assembled).digest() == torr_info['info']['pieces'][20 * index: 20 * (index+1)]:
+
+            # Save the piece to disk
+            with open('downloads/' + torr_info['info']['name'], 'rb+') as f:
+              f.seek(offset)
+              f.write(assembled)
+
+            # This piece is no longer needed
+            del pieces[index]
+
+            # Send 'have' message to peer
+            conn.send(pwp.have(index))
+          else:
+            pieces[index] = set()
+            # TODO: re-request all blocks in piece
+            print('Received invalid piece: {}.'.format(msg['payload']['index']))
+        
   print()
-
-  # Assemble pieces and write to disk
-  with open('{}'.format(torr_info['info']['name']), 'wb') as f:
-    for index, piece in enumerate(pieces):
-
-      assembled = b''.join(block[1] for block in sorted(piece))
-
-      if hashlib.sha1(assembled).digest() == torr_info['info']['pieces'][20 * index: 20 * (index+1)]:
-        f.write(assembled)
-      else:
-        f.write(bytes(len(assembled)))
-        print('Piece {} is invalid. Writing zeros instead.'.format(index))
 
 
 if __name__ == '__main__':

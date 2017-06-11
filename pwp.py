@@ -145,7 +145,27 @@ def request_all(file_size):
 
   return b''.join( request(i, j*block_size, block_size) for i in range(num_whole_pieces) for j in range(blocks_per_piece) ) + t + v
 
-  
+ 
+def request_piece(index, file_len):
+  '''Request an entire piece'''
+
+  piece_size = 2**18
+  block_size = 2**14
+
+  net_offset = index * piece_size
+  reqs = []
+
+  # Create individual requests
+  for i in range(16):
+    if net_offset >= file_len:
+      break
+
+    reqs.append(request(index, i*block_size, min(block_size, file_len - net_offset)))
+    net_offset += block_size
+
+  # Join all requests into single byte-string
+  return b''.join(reqs)
+
 
 def parse_next_message(conn):
   '''Parse the next message received from a peer'''

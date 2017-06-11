@@ -1,5 +1,10 @@
-import hashlib
+'''Library for creating and reading torrent files'''
+
+# Stdlib
 import datetime
+
+# Project
+import hashlib
 
 
 def parse_bencode(byts, start=0):
@@ -64,6 +69,8 @@ def parse_bencode(byts, start=0):
     return res, pos + 1
 
 
+# TODO: We only need one of these functions now
+
 def infohash_hex(torr_dict):
   '''Return the infohash of a torrent as a hexstring'''
   return hashlib.sha1(bencode(torr_dict['info'])).hexdigest()
@@ -90,6 +97,8 @@ def create_torrent(file_name, piece_length=2**18, comment=''):
   Return a dictionary containing the torrent info for the given file.
   '''
 
+  # TODO: If file_name is a directory, create a multi-file torrent
+
   hash_list = []
   file_length  = 0
 
@@ -109,6 +118,7 @@ def create_torrent(file_name, piece_length=2**18, comment=''):
     # Read the first piece
     piece = f.read(piece_length)
 
+    # Compute the sha1 digest of every piece
     while len(piece) > 0:
       hash_list.append(hashlib.sha1(piece).digest())
       piece = f.read(piece_length)
@@ -116,7 +126,7 @@ def create_torrent(file_name, piece_length=2**18, comment=''):
     # The length of the file (in bytes)
     torrent['info']['length'] = f.tell()
 
-  # Add the hash list to the dictionary
+  # Concatenate the piece hashes to create the 'piece' field
   torrent['info']['pieces'] = b''.join(hash_list)
 
   # Add the time of creation

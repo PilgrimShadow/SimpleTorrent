@@ -131,8 +131,12 @@ def main():
             # Send 'have' message to peer
             conn.send(pwp.have(index))
           else:
+            # Discard all blocks of the invalid piece
             pieces[index] = set()
-            # TODO: re-request all blocks in piece
+
+            # Re-request the invalid piece
+            conn.send(pwp.request_piece(index, torr_info['info']['length']))
+
             print('Received invalid piece: {}.'.format(msg['payload']['index']))
         
   print()

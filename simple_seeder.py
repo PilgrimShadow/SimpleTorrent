@@ -5,11 +5,23 @@ A multi-threaded server that seeds torrents
 '''
 
 # Stdlib
-import sys, os, socket, threading, time
+import sys, os, socket, threading, time, math
 
 # Project
 import torrent, pwp
 
+
+def byte_to_set(byte):
+  return { i for i in range(8) if (byte & (128 >> i)) }
+
+
+def bytestring_to_set(bytestring):
+  s = set()
+
+  for i, byte in enumerate(bytestring):
+    s |= { b + i*8 for b in byte_to_set(byte) }
+
+  return s
 
 def handle_incoming(conn, my_peer_id, torrents):
   '''Function called to handle each incoming connection'''
@@ -25,6 +37,7 @@ def handle_incoming(conn, my_peer_id, torrents):
   peer_choking = 1
   peer_interested = 0
 
+  # The set of pieces our peer has
   peer_has = set()
 
   # Receive the first part of the handshake
@@ -37,7 +50,10 @@ def handle_incoming(conn, my_peer_id, torrents):
     print('Closed connection to {}:{}'.format(peer_info[0], peer_info[1]), end='\n\n')
     return
 
+  # Get some info for our torrent
   torr_info = torrents[d['info_hash']]
+  piece_size = torr_info['info']['piece length']
+  num_pieces = int(math.ceil(torr_info['info']['length'] / piece_size))
 
   # Send our handshake
   pwp.send_handshake_reply(conn, d['info_hash'], my_peer_id)
@@ -53,11 +69,35 @@ def handle_incoming(conn, my_peer_id, torrents):
   # Get the length of the file
   file_len = f.seek(0, 2)
 
-  while True:
+  # TODO: Send our bitfield message
+
+  # Receive and parse the first message
+  msg = pwp.parse_next_message(conn)
+  msg_id = msg['id']
+
+  # Check for a bitfield message
+  if msg_id == 5:
+
+    # Check the bitfield length
+    if len(msg['payload']) != int(math.ceil(num_pieces / 8)):
+      print('Received invalid bitfield from {}:{} (wrong length)'.format(peer_info[0], peer_info[1]))
+      conn.close
+      return
+
+    peer_has = bytestring_to_set(msg['payload'])
+
+    # Check if any invalid bits were set
+    if max(peer_has) >= num_pieces:
+      print('Received invalid bitfield from {}:{} (extra bits were set)'.format(peer_info[0], peer_info[1]))
+      conn.close()
+      return
 
     # Receive and parse the next message
     msg = pwp.parse_next_message(conn)
     msg_id = msg['id']
+    
+
+  while True:
 
     if msg_id == -2:
       break  # The connection was closed
@@ -74,11 +114,12 @@ def handle_incoming(conn, my_peer_id, torrents):
     elif msg_id == 4:
       peer_has.add(msg['payload'])
     elif msg_id == 5:
-      pass
+      print('Received bitfield after initial message...closing connection')
+      break
     elif msg_id == 6:
 
       # Compute the byte-offset of this block within the file
-      offset = (msg['payload']['index'] * (2**18)) + msg['payload']['begin']
+      offset = (msg['payload']['index'] * piece_size) + msg['payload']['begin']
 
       # Check that the block is valid
       if offset + msg['payload']['length'] > file_len:
@@ -99,6 +140,11 @@ def handle_incoming(conn, my_peer_id, torrents):
       pass
     elif msg_id == 9:
       pass
+
+    # Receive and parse the next message
+    msg = pwp.parse_next_message(conn)
+    msg_id = msg['id']
+
 
   # Close the connection
   conn.close()
@@ -130,6 +176,7 @@ def start(port, my_peer_id):
         torr_info = torrent.read_torrent_file(dirpath + '/' + filename)
         torrs[torrent.infohash(torr_info)] = torr_info
 
+  # Display the torrents we are serving
   print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()), end='\n\n')
 
   while True:

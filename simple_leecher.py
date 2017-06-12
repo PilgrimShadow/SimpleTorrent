@@ -17,8 +17,8 @@ def main():
     if arg.startswith('-p'):
       port = int(arg[2:])
 
-    if arg.startswith('--port'):
-      port = int(arg[6:])
+    if arg.startswith('--port='):
+      port = int(arg[7:])
 
   addr = sys.argv[-2]
   torr_file = sys.argv[-1]

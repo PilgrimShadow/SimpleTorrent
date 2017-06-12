@@ -69,17 +69,9 @@ def parse_bencode(byts, start=0):
     return res, pos + 1
 
 
-# TODO: We only need one of these functions now
-
-def infohash_hex(torr_dict):
-  '''Return the infohash of a torrent as a hexstring'''
-  return hashlib.sha1(bencode(torr_dict['info'])).hexdigest()
-
-
 def infohash(torr_dict):
-  '''Return the infohash of a torrent as a bytestring'''
-
-  return bytes.fromhex(infohash_hex(torr_dict))
+  '''Return the infohash of a torrent as a hexstring'''
+  return hashlib.sha1(bencode(torr_dict['info'])).digest()
 
 
 def read_torrent_file(file_name):

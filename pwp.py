@@ -174,15 +174,43 @@ class MessageParser():
   '''
 
   def __init__(self, initial_data=b''):
+
+    # Any initial data to place in the buffer
     self.unread= initial_data
+
+    # Have we seen the infohash yet?
+    self.infohash = False
+
+    # Have we seen the peer_id yet?
+    self.peer_id = False
+
+
+  def __iter__(self):
+    return self
+
 
   def add(self, data):
     '''Add more data to the buffer'''
     self.unread += data
 
+
   def has_next(self):
     '''Indicates whether there is a complete message in the buffer'''
 
+    # We are waiting on the infohash
+    if not self.infohash:
+      if len(self.unread) > 0:
+        handshake_len = 49 + self.unread[0]
+        if len(self.unread) >= handshake_len:
+          return True
+
+      return False
+
+    # We are waiting on the peer_id
+    if not self.peer_id:
+      return len(self.unread) >= 20
+
+    # We are waiting on a normal message
     if len(self.unread) < 4:
       return False
 
@@ -190,20 +218,35 @@ class MessageParser():
     msg_len = struct.unpack('>I', self.unread[:4])[0]
 
     # Check if the entire message is in the buffer
-    if len(self.unread) < msg_len:
-      return False
-
-    return True
+    return len(self.unread) >= 4+msg_len
 
 
-  def next(self):
-    '''Parse the next message'''
+  def __next__(self):
+    '''Parse and return the next message'''
 
     # A dictionary representing the parsed message
     resp = {'id': -2, 'name': '', 'payload': None}
 
-    if len(self.unread) < 4:
-      return None
+    # This class will behave as an iterator
+    if not self.has_next():
+      raise StopIteration()
+
+    # The next 'message' is the infohash
+    if not self.infohash:
+      resp['name'] = 'infohash'
+      pstr_len = self.unread[0]
+      resp['payload'] = self.unread[pstr_len+9 : pstr_len+29]
+      self.unread = self.unread[29+pstr_len:]
+      self.infohash = True
+      return resp
+
+    # The next 'message' is the peer_id
+    if not self.peer_id:
+      resp['name'] = 'peer_id'
+      resp['payload'] = self.unread[:20]
+      self.unread = self.unread[20:]
+      self.peer_id = True
+      return resp
 
     # Read the length of the next message
     msg_len = struct.unpack('>I', self.unread[:4])[0]
@@ -214,10 +257,6 @@ class MessageParser():
       resp['name'] = 'keep-alive'
       self.unread = self.unread[4:]
       return resp
-
-    # Check if the entire message is here
-    if len(self.unread) < msg_len:
-      return None
 
     msg = self.unread[4:4 + msg_len]
 
@@ -262,6 +301,9 @@ class MessageParser():
     self.unread = self.unread[4 + msg_len:]
 
     return resp
+
+  def next(self):
+    return self.__next__()
 
 
 def parse_next_message(conn):

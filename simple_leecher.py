@@ -1,4 +1,6 @@
 #!/usr/bin/env python3.6
+
+# Stdlib
 import sys, socket, math, hashlib, time
 
 # Project
@@ -64,6 +66,8 @@ def main():
   req = pwp.request_all(torr_info['info']['length'])
   conn.send(req)
 
+  piece_size = torr_info['info']['piece length']
+
   blocks_expected = len(req) / 17
   pieces_expected = int(math.ceil(blocks_expected / 16))
   blocks_in_last_piece = blocks_expected % 16
@@ -113,7 +117,7 @@ def main():
       # Assemble the piece if all blocks have arrived
       if (index == pieces_expected-1 and len(pieces[index]) == blocks_in_last_piece) or len(pieces[index]) == 16:
 
-          offset = index * (2**18)
+          offset = index * piece_size
           piece = pieces[index]
           assembled = b''.join(block[1] for block in sorted(piece))
 

@@ -1,11 +1,7 @@
 '''Library for creating and reading torrent files'''
 
 # Stdlib
-import datetime
-
-# Project
-import hashlib
-
+import datetime, hashlib
 
 def parse_bencode(byts, start=0):
   '''Parse a bencoded bytestring'''
@@ -107,11 +103,14 @@ def create_torrent(file_name, piece_length=2**18, comment=''):
 
   with open(file_name, 'rb') as f:
     
+    md5hash = hashlib.md5()
+
     # Read the first piece
     piece = f.read(piece_length)
 
     # Compute the sha1 digest of every piece
     while len(piece) > 0:
+      md5hash.update(piece)
       hash_list.append(hashlib.sha1(piece).digest())
       piece = f.read(piece_length)
 
@@ -120,6 +119,9 @@ def create_torrent(file_name, piece_length=2**18, comment=''):
 
   # Concatenate the piece hashes to create the 'piece' field
   torrent['info']['pieces'] = b''.join(hash_list)
+
+  # Add the md5 sum of the file
+  torrent['info']['md5sum'] = md5hash.digest().hex()
 
   # Add the time of creation
   torrent['creation date'] = int(datetime.datetime.now().timestamp())

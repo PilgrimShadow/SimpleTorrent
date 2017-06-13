@@ -167,6 +167,103 @@ def request_piece(index, file_len):
   return b''.join(reqs)
 
 
+class MessageParser():
+  '''Class for parsing PWP messages
+
+     TODO: Perhaps turn this into an iterator?
+  '''
+
+  def __init__(self, initial_data=b''):
+    self.unread= initial_data
+
+  def add(self, data):
+    '''Add more data to the buffer'''
+    self.unread += data
+
+  def has_next(self):
+    '''Indicates whether there is a complete message in the buffer'''
+
+    if len(self.unread) < 4:
+      return False
+
+    # Read the length of the next message
+    msg_len = struct.unpack('>I', self.unread[:4])[0]
+
+    # Check if the entire message is in the buffer
+    if len(self.unread) < msg_len:
+      return False
+
+    return True
+
+
+  def next(self):
+    '''Parse the next message'''
+
+    # A dictionary representing the parsed message
+    resp = {'id': -2, 'name': '', 'payload': None}
+
+    if len(self.unread) < 4:
+      return None
+
+    # Read the length of the next message
+    msg_len = struct.unpack('>I', self.unread[:4])[0]
+
+    # Handle the keep-alive message
+    if msg_len == 0:
+      resp['id'] = -1
+      resp['name'] = 'keep-alive'
+      self.unread = self.unread[4:]
+      return resp
+
+    # Check if the entire message is here
+    if len(self.unread) < msg_len:
+      return None
+
+    msg = self.unread[4:4 + msg_len]
+
+    # TODO: Check if the msg id is an ascii decimal
+    resp['id'] = msg[0]
+     
+    # Get payload if it exists
+    if resp['id'] == 0:
+      resp['name'] = 'choke' 
+    elif resp['id'] == 1:
+      resp['name'] = 'unchoke'
+    elif resp['id'] == 2:
+      resp['name'] = 'interested'
+    elif resp['id'] == 3:
+      resp['name'] = 'uninterested'
+    elif resp['id'] == 4:
+      resp['name'] = 'have'
+      resp['payload'] = struct.unpack('>I', msg[1:])[0]
+    elif resp['id'] == 5:
+      resp['name'] = 'bitfield'
+      resp['payload'] = msg[1:]
+    elif resp['id'] == 6:
+      resp['name'] = 'request'
+      index, begin, length = struct.unpack('>III', msg[1:])
+      resp['payload'] = { 'index': index, 'begin': begin, 'length': length }
+    elif resp['id'] == 7:
+      resp['name'] = 'piece'
+      index, begin = struct.unpack('>II', msg[1:9])
+      resp['payload'] = { 'index': index, 'begin': begin, 'block': msg[9:] }
+    elif resp['id'] == 8:
+      resp['name'] = 'cancel'
+      index, begin, length = struct.unpack('>III', msg[1:])
+      resp['payload'] = { 'index': index, 'begin': begin, 'length': length }
+    elif resp['id'] == 9:
+      resp['name'] = 'port'
+      resp['payload'] = struct.unpack('>H', msg[1:])[0]
+    else:
+      # Invalid msg id
+      raise Exception('Invalid message received')
+
+    # Advance the buffer
+    self.unread = self.unread[4 + msg_len:]
+
+    return resp
+
+
 def parse_next_message(conn):
   '''Parse the next message received from a peer'''
 
@@ -217,7 +314,6 @@ def parse_next_message(conn):
     resp['name'] = 'cancel'
     index, begin, length = struct.unpack('>III', remaining[1:])
     resp['payload'] = { 'index': index, 'begin': begin, 'length': length }
-    pass
   elif resp['id'] == 9:
     resp['name'] = 'port'
     resp['payload'] = struct.unpack('>H', remaining[1:])[0]

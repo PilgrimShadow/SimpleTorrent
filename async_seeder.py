@@ -24,20 +24,23 @@ def bytestring_to_set(bytestring):
   return s
 
 
-
-
-class SimpleTorrentProtocol(asyncio.Protocol):
+class TorrentProtocol(asyncio.Protocol):
   '''A simple torrent protocol
 
   '''
 
-  def __init__(self): 
+  def __init__(self, queue): 
 
+    # The queue in which to place messages
+    self.queue = queue
+
+    # The state of this peer
     self.am_choking = 1
     self.am_interested = 0
     self.peer_choking = 1
     self.peer_interested = 0
 
+    # Torrent and peer identifiers
     self.infohash = b''
     self.peer_id  = b''
 
@@ -59,8 +62,6 @@ class SimpleTorrentProtocol(asyncio.Protocol):
 
       # TODO: Check if we have the torrent, and get info
 
-      self.file = open('', 'rb+')
-
       # Only change the handler if a message was parsed
       self.handler = self._peer_id_handler
 
@@ -77,6 +78,9 @@ class SimpleTorrentProtocol(asyncio.Protocol):
 
       self.peer_id = msg['payload']
 
+      # Put the handshake message in the queue
+      self.queue.put({'id': -3, 'name': 'handshake', 'payload': {'infohash': self.infohash, 'peer_id': self.peer_id}})
+
       # Only change the handler if a message was parsed
       self.handler = self._message_handler
 
@@ -88,28 +92,15 @@ class SimpleTorrentProtocol(asyncio.Protocol):
     '''Handles normal PWP messages with a peer'''
 
     for msg in self.parser:
+      self.queue.put(msg)
 
-      # TODO: I think closed connections will be handled by the Protocol
-      if msg_id == -2:
-        break  # The connection was closed
-      elif msg_id == -1:
-        pass   # Keep-alive
-      elif msg['id'] == 0:
-        self.peer_choking = 1
-      elif msg['id'] == 1:
-        self.peer_choking = 0
-      elif msg['id'] == 2:
-        self.peer_interested = 1
-      elif msg['id'] == 3:
-        self.peer_interested = 0
-      elif msg['id'] == 4:
-        self.peer_has.add(msg['payload'])
+
 
 
   def connection_made(self, transport):
     '''Called when a connection is established'''
 
-    peername = transport.get_extra_info('transport')
+    self.peername = transport.get_extra_info('transport')
     print('Connected from {}'.format(peername))
 
     self.transport = transport
@@ -117,7 +108,8 @@ class SimpleTorrentProtocol(asyncio.Protocol):
 
 
   def connection_lost(self, exc):
-    self.file.close()
+    print('Lost connection with {}'.format(self.peername))
+
 
   def data_received(self, data):
     '''Called when a socket receives data'''
@@ -128,17 +120,23 @@ class SimpleTorrentProtocol(asyncio.Protocol):
     # Handle the messages
     self.handler()
 
-      
+
+def peer_data(handshake):
+  return {'infohash': handshake['payload']['infohash'],
+          'peer_id': handshake['payload']['peer_id'],
+          'peer_choking': True, 'am_choking': True,
+          'peer_interested': False, 'am_interested': False,
+          'peer_has': set()}
 
 
-def handle_incoming(conn, my_peer_id, torrents):
+def consumer(msg_queue, torrents):
   '''Function called to handle each incoming connection'''
 
-  # Get address and port of our peer
-  peer_info = conn.getpeername()
+  # Map from peer_id to peer_info
+  peers = dict()
 
-  # Receive the first part of the handshake
-  d = pwp.receive_infohash(conn)
+  # Map from infohash to file info
+  files = dict()
 
   # Check that we have the file specified by the infohash
   if d['info_hash'] not in torrents.keys():
@@ -155,22 +153,11 @@ def handle_incoming(conn, my_peer_id, torrents):
   # Send our handshake
   pwp.send_handshake_reply(conn, d['info_hash'], my_peer_id)
 
-  # Receive the rest of the handshake (peer_id)
-  d['peer_id'] = pwp.receive_peer_id(conn)
-
-  print('Completed handshake with {}:{}'.format(peer_info[0], peer_info[1]))
-
   # Open the file
   f = open('files/' + torr_info['info']['name'], 'rb')
 
   # Get the length of the file
   file_len = f.seek(0, 2)
-
-  # TODO: Send our bitfield message
-
-  # Receive and parse the first message
-  msg = pwp.parse_next_message(conn)
-  msg_id = msg['id']
 
   # Check for a bitfield message
   if msg_id == 5:
@@ -189,14 +176,28 @@ def handle_incoming(conn, my_peer_id, torrents):
       conn.close()
       return
 
-    # Receive and parse the next message
-    msg = pwp.parse_next_message(conn)
-    msg_id = msg['id']
-    
-
   while True:
 
-    if msg_id == 5:
+    # Get the next message from the queue
+    msg = msg_queue.get()
+
+    if msg['name'] == 'handshake':
+      peers[msg['peer_id']] = peer_data(msg)
+    elif msg_id == -2:
+      del peers[msg['peer_id']] # Connection was closed
+    elif msg_id == -1:
+      pass   # Keep-alive
+    elif msg['id'] == 0:
+      peers[msg['peer_id']]['peer_choking'] = True
+    elif msg['id'] == 1:
+      peers[msg['peer_id']]['peer_choking'] = False
+    elif msg['id'] == 2:
+      peers[msg['peer_id']]['peer_interested'] = True
+    elif msg['id'] == 3:
+      peers[msg['peer_id']]['peer_interested'] = False
+    elif msg['id'] == 4:
+      peers[msg['peer_id']]['peer_has'].add(msg['payload'])
+    elif msg_id == 5:
       print('Received bitfield after initial message...closing connection')
       break
     elif msg_id == 6:
@@ -217,37 +218,9 @@ def handle_incoming(conn, my_peer_id, torrents):
       # Send the requested block
       conn.send(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
 
-    elif msg_id == 7:
-      pass
-    elif msg_id == 8:
-      pass
-    elif msg_id == 9:
-      pass
-
-    # Receive and parse the next message
-    msg = pwp.parse_next_message(conn)
-    msg_id = msg['id']
-
-
-  # Close the connection
-  conn.close()
-
-  print('Closed connection to {}:{}'.format(peer_info[0], peer_info[1]), end='\n\n')
-
 
 def start(port, my_peer_id):
-
-  # Create socket for TCP communication
-  s = socket.socket()
-
-  # Bind socket to a local port
-  try:
-    s.bind(('localhost', port))
-  except socket.error as e:
-    print('Socket Bind Failed: ' + e)
-
-  # Begin listening on socket
-  s.listen(8)
+  '''Start the server on the given port'''
 
   # A dictionary of all the infohashes we are seeding
   torrs = dict()
@@ -262,15 +235,34 @@ def start(port, my_peer_id):
   # Display the torrents we are serving
   print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()), end='\n\n')
 
-  while True:
-    # Accept a connection
-    conn, addr = s.accept()
+  # The message queue
+  q = queue.Queue()
 
-    # Handle the connection in its own thread
-    t = threading.Thread(target=handle_incoming, args=(conn, my_peer_id, torrs))
+  # Create the consumer thread
+  t = threading.Thread(target=consumer, args = (q, torrs))
 
-    #Start the thread
-    t.start()
+  # Start the consumer thread
+  t.start()
+
+  loop = asyncio.get_event_loop()
+
+  # Create the server coroutine
+  coro = loop.create_server(lambda: TorrentProtocol(q), '127.0.0.1', port)
+
+  # Schedule the server
+  server = loop.run_until_complete(coro)
+
+  # Run the server until interrupted
+  try:
+    loop.run_forever()
+  except KeyboardInterrupt:
+    pass
+
+  # Close the server
+  server.close()
+
+  # Close the event loop
+  loop.close()
 
 
 def main():

@@ -29,10 +29,12 @@ class TorrentProtocol(asyncio.Protocol):
 
   '''
 
-  def __init__(self, queue): 
+  def __init__(self, queue, torrents): 
 
     # The queue in which to place messages
     self.queue = queue
+    self.parser = pwp.MessageParser()
+    self.torrents = torrents
 
     # The state of this peer
     self.am_choking = 1
@@ -61,6 +63,14 @@ class TorrentProtocol(asyncio.Protocol):
       self.infohash = msg['payload']
 
       # TODO: Check if we have the torrent, and get info
+      # Check that we have the file specified by the infohash
+      if self.infohash not in self.torrents.keys():
+        print('{} requested unknown torrent: {}'.format(self.peername), self.infohash.hex())
+        transport.close()
+        return
+
+      # Send our handshake
+      self.transport.write(pwp.create_handshake(self.infohash, b'1'*20))
 
       # Only change the handler if a message was parsed
       self.handler = self._peer_id_handler
@@ -79,7 +89,7 @@ class TorrentProtocol(asyncio.Protocol):
       self.peer_id = msg['payload']
 
       # Put the handshake message in the queue
-      self.queue.put({'id': -3, 'name': 'handshake', 'payload': {'infohash': self.infohash, 'peer_id': self.peer_id}})
+      self.queue.put_nowait({'id': -3, 'name': 'handshake', 'payload': {'infohash': self.infohash, 'peer_id': self.peer_id}})
 
       # Only change the handler if a message was parsed
       self.handler = self._message_handler
@@ -88,23 +98,39 @@ class TorrentProtocol(asyncio.Protocol):
       self.handler()
 
 
+  def _bitfield_handler(self):
+
+    # Check for a bitfield message
+    if msg_id == 5:
+
+      # Check the bitfield length
+      if len(msg['payload']) != int(math.ceil(num_pieces / 8)):
+        print('Received invalid bitfield from {}:{} (wrong length)'.format(peer_info[0], peer_info[1]))
+        transport.close()
+        return
+
+      peer_has = bytestring_to_set(msg['payload'])
+
+      # Check if any invalid bits were set
+      if max(peer_has) >= num_pieces:
+        print('Received invalid bitfield from {}:{} (extra bits were set)'.format(peer_info[0], peer_info[1]))
+        transport.close()
+        return
+
   def _message_handler(self):
     '''Handles normal PWP messages with a peer'''
 
     for msg in self.parser:
-      self.queue.put(msg)
-
-
+      self.queue.put_nowait(msg)
 
 
   def connection_made(self, transport):
     '''Called when a connection is established'''
 
     self.peername = transport.get_extra_info('transport')
-    print('Connected from {}'.format(peername))
+    print('Connection from {}'.format(self.peername))
 
     self.transport = transport
-    self.parser = pwp.MessageParser()
 
 
   def connection_lost(self, exc):
@@ -129,7 +155,7 @@ def peer_data(handshake):
           'peer_has': set()}
 
 
-def consumer(msg_queue, torrents):
+async def consumer(msg_queue, torrents):
   '''Function called to handle each incoming connection'''
 
   # Map from peer_id to peer_info
@@ -138,48 +164,19 @@ def consumer(msg_queue, torrents):
   # Map from infohash to file info
   files = dict()
 
-  # Check that we have the file specified by the infohash
-  if d['info_hash'] not in torrents.keys():
-    print('{}:{} requested unknown torrent:'.format(peer_info[0], peer_info[1]), d['info_hash'].hex())
-    conn.close()
-    print('Closed connection to {}:{}'.format(peer_info[0], peer_info[1]), end='\n\n')
-    return
-
   # Get some info for our torrent
-  torr_info = torrents[d['info_hash']]
-  piece_size = torr_info['info']['piece length']
-  num_pieces = int(math.ceil(torr_info['info']['length'] / piece_size))
-
-  # Send our handshake
-  pwp.send_handshake_reply(conn, d['info_hash'], my_peer_id)
-
-  # Open the file
-  f = open('files/' + torr_info['info']['name'], 'rb')
-
-  # Get the length of the file
-  file_len = f.seek(0, 2)
-
-  # Check for a bitfield message
-  if msg_id == 5:
-
-    # Check the bitfield length
-    if len(msg['payload']) != int(math.ceil(num_pieces / 8)):
-      print('Received invalid bitfield from {}:{} (wrong length)'.format(peer_info[0], peer_info[1]))
-      conn.close
-      return
-
-    peer_has = bytestring_to_set(msg['payload'])
-
-    # Check if any invalid bits were set
-    if max(peer_has) >= num_pieces:
-      print('Received invalid bitfield from {}:{} (extra bits were set)'.format(peer_info[0], peer_info[1]))
-      conn.close()
-      return
+  #torr_info = torrents[d['info_hash']]
+  #piece_size = torr_info['info']['piece length']
+  #num_pieces = int(math.ceil(torr_info['info']['length'] / piece_size))
 
   while True:
 
     # Get the next message from the queue
-    msg = msg_queue.get()
+    msg = await msg_queue.get()
+
+    # TODO: Testing
+    print(msg)
+    continue
 
     if msg['name'] == 'handshake':
       peers[msg['peer_id']] = peer_data(msg)
@@ -235,28 +232,16 @@ def start(port, my_peer_id):
   # Display the torrents we are serving
   print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()), end='\n\n')
 
-  # The message queue
-  q = queue.Queue()
-
-  # Create the consumer thread
-  t = threading.Thread(target=consumer, args = (q, torrs))
-
-  # Start the consumer thread
-  t.start()
-
   loop = asyncio.get_event_loop()
 
+  # The message queue
+  q = asyncio.Queue(loop=loop)
+
   # Create the server coroutine
-  coro = loop.create_server(lambda: TorrentProtocol(q), '127.0.0.1', port)
+  coro = loop.create_server(lambda: TorrentProtocol(q, torrs), '127.0.0.1', port)
 
   # Schedule the server
-  server = loop.run_until_complete(coro)
-
-  # Run the server until interrupted
-  try:
-    loop.run_forever()
-  except KeyboardInterrupt:
-    pass
+  server = loop.run_until_complete(asyncio.gather(coro, consumer(q, torrs)))
 
   # Close the server
   server.close()

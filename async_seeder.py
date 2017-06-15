@@ -5,7 +5,7 @@ A multi-threaded server that seeds torrents
 '''
 
 # Stdlib
-import asyncio, sys, os, socket, threading, time, math
+import asyncio, sys, os, time, math
 
 # Project
 import torrent, pwp
@@ -33,7 +33,6 @@ class TorrentProtocol(asyncio.Protocol):
 
     # The queue in which to place messages
     self.queue = queue
-    self.parser = pwp.MessageParser()
     self.torrents = torrents
 
     # The state of this peer
@@ -62,7 +61,6 @@ class TorrentProtocol(asyncio.Protocol):
 
       self.infohash = msg['payload']
 
-      # TODO: Check if we have the torrent, and get info
       # Check that we have the file specified by the infohash
       if self.infohash not in self.torrents.keys():
         print('{} requested unknown torrent: {}'.format(self.peername), self.infohash.hex())
@@ -120,7 +118,9 @@ class TorrentProtocol(asyncio.Protocol):
   def _message_handler(self):
     '''Handles normal PWP messages with a peer'''
 
+    # Put all new messages into queue
     for msg in self.parser:
+      msg['transport'] = self.transport
       self.queue.put_nowait(msg)
 
 
@@ -128,12 +128,18 @@ class TorrentProtocol(asyncio.Protocol):
     '''Called when a connection is established'''
 
     self.peername = transport.get_extra_info('transport')
-    print('Connection from {}'.format(self.peername))
-
     self.transport = transport
+    self.parser = pwp.MessageParser(transport)
+
+    print('Connection from {}'.format(self.peername))
 
 
   def connection_lost(self, exc):
+    '''Called when the connection is lost'''
+
+    # Put the connection closed message in the queue
+    self.queue.put_nowait({'id': -2, 'name': 'closed', 'peer_id': self.peer_id, 'payload': None})
+
     print('Lost connection with {}'.format(self.peername))
 
 
@@ -156,7 +162,7 @@ def peer_data(handshake):
 
 
 async def consumer(msg_queue, torrents):
-  '''Function called to handle each incoming connection'''
+  '''Coroutine that processes all messages'''
 
   # Map from peer_id to peer_info
   peers = dict()
@@ -165,7 +171,6 @@ async def consumer(msg_queue, torrents):
   files = dict()
 
   # Get some info for our torrent
-  #torr_info = torrents[d['info_hash']]
   #piece_size = torr_info['info']['piece length']
   #num_pieces = int(math.ceil(torr_info['info']['length'] / piece_size))
 
@@ -173,47 +178,64 @@ async def consumer(msg_queue, torrents):
 
     # Get the next message from the queue
     msg = await msg_queue.get()
-
-    # TODO: Testing
-    print(msg)
-    continue
+    msg_queue.task_done()
 
     if msg['name'] == 'handshake':
       peers[msg['peer_id']] = peer_data(msg)
-    elif msg_id == -2:
-      del peers[msg['peer_id']] # Connection was closed
     elif msg_id == -1:
       pass   # Keep-alive
-    elif msg['id'] == 0:
-      peers[msg['peer_id']]['peer_choking'] = True
-    elif msg['id'] == 1:
-      peers[msg['peer_id']]['peer_choking'] = False
-    elif msg['id'] == 2:
-      peers[msg['peer_id']]['peer_interested'] = True
-    elif msg['id'] == 3:
-      peers[msg['peer_id']]['peer_interested'] = False
-    elif msg['id'] == 4:
-      peers[msg['peer_id']]['peer_has'].add(msg['payload'])
-    elif msg_id == 5:
-      print('Received bitfield after initial message...closing connection')
-      break
-    elif msg_id == 6:
+    else:
+      peers[msg['peer_id']].queue.put_nowait(msg)
 
-      # Compute the byte-offset of this block within the file
-      offset = (msg['payload']['index'] * piece_size) + msg['payload']['begin']
 
-      # Check that the block is valid
-      if offset + msg['payload']['length'] > file_len:
-        print('{}:{} requested invalid block (overflow)'.format(peer_info[0], peer_info[1]))
-        break
+async def worker(peers, n=10):
+  '''Fairly handle peer messages'''
 
-      f.seek(offset)
+  while True:
+    for peer in peers:
 
-      # Read the requested block
-      block = f.read(msg['payload']['length'])
+      # Handle up to n messages
+      for _ in range(n):
+        try:
+          # Get the next message for this peer
+          msg = peer['queue'].get_nowait()
+          peer['queue'].task_done()
 
-      # Send the requested block
-      conn.send(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
+          if msg['id'] == -2:
+            del peers[msg['peer_id']] # Connection was closed
+          elif msg['id'] == 0:
+            peers[msg['peer_id']]['peer_choking'] = True
+          elif msg['id'] == 1:
+            peers[msg['peer_id']]['peer_choking'] = False
+          elif msg['id'] == 2:
+            peers[msg['peer_id']]['peer_interested'] = True
+          elif msg['id'] == 3:
+            peers[msg['peer_id']]['peer_interested'] = False
+          elif msg['id'] == 4:
+            peers[msg['peer_id']]['peer_has'].add(msg['payload'])
+          elif msg_id == 5:
+            print('Received bitfield after initial message...closing connection')
+            break
+          elif msg_id == 6:
+
+            # Compute the byte-offset of this block within the file
+            offset = (msg['payload']['index'] * piece_size) + msg['payload']['begin']
+
+            # Check that the block is valid
+            if offset + msg['payload']['length'] > file_len:
+              print('{}:{} requested invalid block (overflow)'.format(peer_info[0], peer_info[1]))
+              break
+
+            f.seek(offset)
+
+            # Read the requested block
+            block = f.read(msg['payload']['length'])
+
+            # Send the requested block
+            conn.send(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
+
+        except:
+          break
 
 
 def start(port, my_peer_id):
@@ -232,6 +254,7 @@ def start(port, my_peer_id):
   # Display the torrents we are serving
   print('Serving...\n' + '\n'.join(ihash.hex() + ' ' + torr['info']['name'] for ihash, torr in torrs.items()), end='\n\n')
 
+  # The event loop
   loop = asyncio.get_event_loop()
 
   # The message queue
@@ -263,6 +286,7 @@ def main():
     if arg.startswith('--port'):
       port = int(arg[6:])
 
+  # Start the server
   start(port, my_peer_id)
 
 if __name__ == '__main__':

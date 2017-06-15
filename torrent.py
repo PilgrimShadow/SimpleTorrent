@@ -23,6 +23,7 @@ def parse_bencode(byts, start=0):
     return int(byts[start+1 : pos-1].decode()), pos
 
   elif byts[pos:pos+1].isdigit():
+
     raw_len = byts[pos:pos+1]
     pos += 1
 

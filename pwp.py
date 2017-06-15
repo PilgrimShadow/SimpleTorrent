@@ -173,10 +173,13 @@ class MessageParser():
      TODO: Perhaps turn this into an iterator?
   '''
 
-  def __init__(self, initial_data=b''):
+  def __init__(self, transport=None, initial_data=b''):
 
     # Any initial data to place in the buffer
     self.unread= initial_data
+
+    # The transport field to be included in all messages
+    self.transport = transport
 
     # Have we seen the infohash yet?
     self.infohash = False
@@ -225,7 +228,7 @@ class MessageParser():
     '''Parse and return the next message'''
 
     # A dictionary representing the parsed message
-    resp = {'id': -2, 'name': '', 'payload': None}
+    resp = {'id': -2, 'name': '', 'transport': self.transport, 'payload': None}
 
     # This class will behave as an iterator
     if not self.has_next():

@@ -38,7 +38,11 @@ def main():
   conn = socket.socket()
 
   # Connect to the remote addres
-  conn.connect((addr, port))
+  try:
+    conn.connect((addr, port))
+  except Exception as e:
+    print(e.args)
+    return
 
   # Create our handshake bytestring
   handshake = pwp.create_handshake(bytehash, my_peer_id)

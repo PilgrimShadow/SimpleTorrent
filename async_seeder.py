@@ -12,10 +12,12 @@ import torrent, pwp
 
 
 def byte_to_set(byte):
+  '''Convert a single byte into a set'''
   return { i for i in range(8) if (byte & (128 >> i)) }
 
 
 def bytestring_to_set(bytestring):
+  '''Convert a bytestring into a set'''
   s = set()
 
   for i, byte in enumerate(bytestring):
@@ -30,16 +32,24 @@ logging.basicConfig(
   stream=sys.stderr
 )
 
-class TorrentProtocol(asyncio.Protocol):
-  '''A simple torrent protocol
+class PeerWireProtocol(asyncio.Protocol):
+  '''Implements the Peer-Wire-Protocol
 
+     Parses incoming PWP messages and places them into a queue.
   '''
 
-  def __init__(self, loop, peers, torrents): 
+  def __init__(self, loop, peers, files, torrents): 
 
     # The queue in which to place messages
     self.queue = asyncio.Queue(loop=loop)
+
+    # The peer list
     self.peers = peers
+
+    # The file dictionary
+    self.files = files
+
+    # The torrents we are serving
     self.torrents = torrents
 
     # The message parser for this connection
@@ -62,15 +72,23 @@ class TorrentProtocol(asyncio.Protocol):
       self.infohash = msg['payload']
 
       # Check that we have the file specified by the infohash
-      if self.infohash not in self.torrents.keys():
+      if self.infohash not in self.torrents:
         self.log.debug('requested unknown torrent: {}'.format(self.infohash.hex()))
         transport.close()
         return
 
+      # The metainfo for the file we are serving
+      self.torr = self.torrents[self.infohash]
+
+      if self.infohash not in self.files:
+        self.files[self.infohash] = open('files/' + self.torr['info']['name'], 'rb')
+
+      self.file = self.files[self.infohash]
+
       # Send our handshake
       self.transport.write(pwp.create_handshake(self.infohash, b'1'*20))
 
-      # Only change the handler if a message was parsed
+      # Advance the handler
       self.handler = self._peer_id_handler
 
       # Handle any other messages
@@ -90,7 +108,7 @@ class TorrentProtocol(asyncio.Protocol):
         'transport': self.transport, 'queue': self.queue,
         'peer_choking': True, 'am_choking': True,
         'peer_interested': False, 'am_interested': False,
-        'peer_has': set()}
+        'peer_has': set(), 'torr': self.torr, 'file': self.file}
 
       # Add this peer to the list
       self.peers.append(peer_info)
@@ -121,6 +139,7 @@ class TorrentProtocol(asyncio.Protocol):
         transport.close()
         return
 
+
   def _message_handler(self):
     '''Handles normal PWP messages'''
 
@@ -134,6 +153,8 @@ class TorrentProtocol(asyncio.Protocol):
 
     self.transport = transport
     self.peername = transport.get_extra_info('peername')
+
+    # Set the logger for this connection
     self.log = logging.getLogger('{}:{}'.format(*self.peername))
 
     self.log.debug('Connection made')
@@ -168,62 +189,74 @@ async def worker(peers, torrs, n=10, sleep=0.001):
 
   '''
 
+  # Map from infohash to file object
+  files = dict()
+
+  # Closed connections to be cleaned up
+  closed = set()
+
   while True:
 
     # Was there any work to do?
     worked = False
 
-    for peer in peers:
+    for i, peer in enumerate(peers):
 
-      # Handle up to n messages
+      # Handle up to n messages per peer
       for _ in range(n):
 
-        try:
-          # Get the next message for this peer
-          msg = peer['queue'].get_nowait()
-          peer['queue'].task_done()
-          worked = True
-
-          # TODO: Debugging
-          print(msg)
-          continue
-
-          if msg['id'] == -1:
-            pass   # Keep-alive
-          elif msg['id'] == -2:
-            pass # Connection was closed
-          elif msg['id'] == 0:
-            peer['am_choking'] = True
-          elif msg['id'] == 1:
-            peer['peer_choking'] = False
-          elif msg['id'] == 2:
-            peer['am_interested'] = True
-          elif msg['id'] == 3:
-            peer['peer_interested'] = False
-          elif msg['id'] == 4:
-            peer['peer_has'].add(msg['payload'])
-          elif msg['id'] == 5:
-            print('Received bitfield after initial message...closing connection')
-          elif msg['id'] == 6:
-
-            # Compute the byte-offset of this block within the file
-            offset = (msg['payload']['index'] * piece_size) + msg['payload']['begin']
-
-            # Check that the block is valid
-            if offset + msg['payload']['length'] > file_len:
-              print('{}:{} requested invalid block (overflow)'.format(peer_info[0], peer_info[1]))
-              break
-
-            f.seek(offset)
-
-            # Read the requested block
-            block = f.read(msg['payload']['length'])
-
-            # Send the requested block
-            peer['transport'].write(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
-
-        except asyncio.QueueEmpty:
+        if peer['queue'].empty():
           break
+
+        # Get the next message for this peer
+        msg = peer['queue'].get_nowait()
+        peer['queue'].task_done()
+        worked = True
+
+        if msg['id'] == -1:
+          pass   # Keep-alive
+        elif msg['id'] == -2:
+          closed.add(i)
+        elif msg['id'] == 0:
+          peer['am_choking'] = True
+        elif msg['id'] == 1:
+          peer['peer_choking'] = False
+        elif msg['id'] == 2:
+          peer['am_interested'] = True
+        elif msg['id'] == 3:
+          peer['peer_interested'] = False
+        elif msg['id'] == 4:
+          peer['peer_has'].add(msg['payload'])
+        elif msg['id'] == 5:
+          peer['peer_has'].update(byteset_to_set(msg['payload']))
+        elif msg['id'] == 6:
+
+          piece_len = peer['torr']['info']['piece length']
+
+          # Compute the byte-offset of this block within the file
+          offset = (msg['payload']['index'] * piece_len) + msg['payload']['begin']
+
+          # Check that the block is valid
+          if offset + msg['payload']['length'] > peer['torr']['info']['length']:
+            print('requested invalid block (overflow)')
+            continue
+
+          peer['file'].seek(offset)
+
+          # Read the requested block
+          block = peer['file'].read(msg['payload']['length'])
+
+          # Send the requested block
+          peer['transport'].write(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
+
+
+    # Clear data for all closed connections
+    for i in closed:
+      peers[i]['transport'].close()
+      del peers[i]['queue']
+      del peers[i]
+
+    closed = set()
 
     # Sleep if no work was done (this allows other coroutines to run)
     if not worked:
@@ -252,11 +285,23 @@ def start(port, my_peer_id):
   # List of all peers to which we are connected
   peers = []
 
+  # Mapping from infohash to file-object
+  files = dict()
+
   # Create the server coroutine
-  server_factory = loop.create_server(lambda: TorrentProtocol(loop, peers, torrs), host='localhost', port=port)
+  server_factory = loop.create_server(lambda: PeerWireProtocol(loop, peers, files, torrs), host='localhost', port=port)
 
   # Schedule the server
-  (server, _) = loop.run_until_complete(asyncio.gather(server_factory, worker(peers, torrs), loop=loop))
+  server = loop.run_until_complete(server_factory)
+
+  try:
+    x = loop.run_until_complete(worker(peers, torrs))
+  except KeyboardInterrupt:
+    print('\rshutting down...')
+
+  # Close all files
+  for f in files.values():
+    f.close()
 
   # Start closing the server
   server.close()

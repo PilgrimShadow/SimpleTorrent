@@ -227,7 +227,7 @@ class MessageParser():
     # A dictionary representing the parsed message
     resp = {'id': -2, 'name': '', 'payload': None}
 
-    # This class will behave as an iterator
+    # There are no more messages to parse
     if not self.has_next():
       raise StopIteration()
 

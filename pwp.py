@@ -4,16 +4,17 @@
 
 
 # Stdlib
-import socket, struct, threading
+import socket, struct, threading, time
 
 
-def recv_until(conn, n, reattempts=3):
+def recv_until(conn, n, reattempts=3, pause=0.001):
 
   msg = conn.recv(n)
 
   for _ in range(reattempts):
     if len(msg) < n:
       msg += conn.recv(n - len(msg))
+      time.sleep(pause)
     else:
       break
 
@@ -312,7 +313,7 @@ def parse_next_message(conn):
   resp = {'id': -2, 'name': '', 'payload': ''}
 
   # Get the length of the next message
-  len_prefix = conn.recv(4)
+  len_prefix = recv_until(conn, 4)
 
   # Check if connection is closed
   if len(len_prefix) == 0:
@@ -325,7 +326,7 @@ def parse_next_message(conn):
     resp['name'] = 'keep-alive'
     return resp
 
-  remaining = conn.recv(msg_len)
+  remaining = recv_until(conn, msg_len)
 
   resp['id'] = remaining[0]
 

@@ -159,7 +159,7 @@ def start(port, my_peer_id):
 
   # Bind socket to a local port
   try:
-    s.bind(('localhost', port))
+    s.bind(('192.168.1.123', port))
   except socket.error as e:
     print('Socket Bind Failed: ' + e)
 

@@ -28,8 +28,9 @@ def bytestring_to_set(bytestring):
 # Configure the logger
 logging.basicConfig(
   level=logging.DEBUG,
-  format='%(name)s: %(message)s',
-  stream=sys.stderr
+  datefmt='%Y/%m/%d',
+  format='%(asctime)s %(name)s %(message)s',
+  filename='async_seeder.log'
 )
 
 class PeerWireProtocol(asyncio.Protocol):
@@ -80,6 +81,7 @@ class PeerWireProtocol(asyncio.Protocol):
       # The metainfo for the file we are serving
       self.torr = self.torrents[self.infohash]
 
+      # Open the file if necessary
       if self.infohash not in self.files:
         self.files[self.infohash] = open('files/' + self.torr['info']['name'], 'rb')
 
@@ -157,7 +159,7 @@ class PeerWireProtocol(asyncio.Protocol):
     # Set the logger for this connection
     self.log = logging.getLogger('{}:{}'.format(*self.peername))
 
-    self.log.debug('Connection made')
+    self.log.debug('connection made')
 
 
   def connection_lost(self, exc):
@@ -189,13 +191,13 @@ async def worker(peers, torrs, n=10, sleep=0.001):
 
   '''
 
-  # Map from infohash to file object
-  files = dict()
-
   # Closed connections to be cleaned up
   closed = set()
 
   while True:
+
+    # TODO: debugging
+    await asyncio.sleep(0.001)
 
     # Was there any work to do?
     worked = False
@@ -252,7 +254,6 @@ async def worker(peers, torrs, n=10, sleep=0.001):
 
     # Clear data for all closed connections
     for i in closed:
-      peers[i]['transport'].close()
       del peers[i]['queue']
       del peers[i]
 
@@ -289,7 +290,7 @@ def start(port, my_peer_id):
   files = dict()
 
   # Create the server coroutine
-  server_factory = loop.create_server(lambda: PeerWireProtocol(loop, peers, files, torrs), host='localhost', port=port)
+  server_factory = loop.create_server(lambda: PeerWireProtocol(loop, peers, files, torrs), host='192.168.1.123', port=port)
 
   # Schedule the server
   server = loop.run_until_complete(server_factory)

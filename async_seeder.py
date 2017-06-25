@@ -39,10 +39,10 @@ class PeerWireProtocol(asyncio.Protocol):
      Parses incoming PWP messages and places them into a queue.
   '''
 
-  def __init__(self, loop, peers, files, torrents): 
+  def __init__(self, peers, files, torrents, seeking=None): 
 
     # The queue in which to place messages
-    self.queue = asyncio.Queue(loop=loop)
+    self.queue = asyncio.Queue()
 
     # The peer list
     self.peers = peers
@@ -53,11 +53,21 @@ class PeerWireProtocol(asyncio.Protocol):
     # The torrents we are serving
     self.torrents = torrents
 
+    self.torr = None
+
+    # Torrent identifier
+    self.infohash = None
+
+    # Are we seeking a particular torrent?
+    if seeking is not None:
+      self.torr = seeking
+      self.infohash = torrent.infohash(seeking)
+
     # The message parser for this connection
     self.parser = pwp.MessageParser()
 
-    # Torrent identifier
-    self.infohash = b''
+    # TODO: Change this
+    self.peer_id = b'1'*20
 
     # The function used to handle messages
     self.handler = self._infohash_handler
@@ -70,25 +80,33 @@ class PeerWireProtocol(asyncio.Protocol):
 
       msg = self.parser.next()
 
-      self.infohash = msg['payload']
+      if self.infohash is None:
+        self.infohash = msg['payload']
 
-      # Check that we have the file specified by the infohash
-      if self.infohash not in self.torrents:
-        self.log.debug('requested unknown torrent: {}'.format(self.infohash.hex()))
-        transport.close()
-        return
+        # Check that we have the file specified by the infohash
+        if self.infohash not in self.torrents:
+          self.log.debug('requested unknown torrent: {}'.format(self.infohash.hex()))
+          transport.close()
+          return
 
-      # The metainfo for the file we are serving
-      self.torr = self.torrents[self.infohash]
+        # The metainfo for the file we are serving
+        self.torr = self.torrents[self.infohash]
+
+        # Send our handshake
+        self.transport.write(pwp.create_handshake(self.infohash, self.peer_id))
+
+      else:
+        # Check that the response shake has the same infohash
+        if self.infohash != msg['payload']:
+          self.log.debug('response handshake had incorrect infohash')
+          self.transport.close()
+          return
 
       # Open the file if necessary
       if self.infohash not in self.files:
         self.files[self.infohash] = open('files/' + self.torr['info']['name'], 'rb')
 
       self.file = self.files[self.infohash]
-
-      # Send our handshake
-      self.transport.write(pwp.create_handshake(self.infohash, b'1'*20))
 
       # Advance the handler
       self.handler = self._peer_id_handler
@@ -122,6 +140,7 @@ class PeerWireProtocol(asyncio.Protocol):
       self.handler()
 
 
+  # TODO: Move these checks to the MessageParser
   def _bitfield_handler(self):
 
     # Check for a bitfield message
@@ -161,6 +180,15 @@ class PeerWireProtocol(asyncio.Protocol):
 
     self.log.debug('connection made')
 
+    # Initiate the handshake, if necessary
+    if self.torr is not None:
+      self.transport.write(pwp.create_handshake(self.infohash, self.peer_id))
+
+      # TODO: Send our bitfield
+
+      # Request the entire file
+      self.transport.write(pwp.request_all(self.torr['info']['length']))
+
 
   def connection_lost(self, exc):
     '''Called when the connection is lost'''
@@ -183,7 +211,7 @@ class PeerWireProtocol(asyncio.Protocol):
     self.handler()
 
 
-async def worker(peers, torrs, n=10, sleep=0.001):
+async def worker(peers, n=10, sleep=0.001):
   '''Fairly handle peer messages
 
   All connected peers are served at the same rate. When there is
@@ -195,9 +223,6 @@ async def worker(peers, torrs, n=10, sleep=0.001):
   closed = set()
 
   while True:
-
-    # TODO: debugging
-    await asyncio.sleep(0.001)
 
     # Was there any work to do?
     worked = False
@@ -251,6 +276,9 @@ async def worker(peers, torrs, n=10, sleep=0.001):
           # Send the requested block
           peer['transport'].write(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
 
+        elif msg['id'] == 7:
+          print('received piece')
+
 
     # Clear data for all closed connections
     for i in closed:
@@ -290,13 +318,13 @@ def start(port, my_peer_id):
   files = dict()
 
   # Create the server coroutine
-  server_factory = loop.create_server(lambda: PeerWireProtocol(loop, peers, files, torrs), host='192.168.1.123', port=port)
+  server_factory = loop.create_server(lambda: PeerWireProtocol(peers, files, torrs), host='192.168.1.123', port=port)
 
   # Schedule the server
   server = loop.run_until_complete(server_factory)
 
   try:
-    x = loop.run_until_complete(worker(peers, torrs))
+    x = loop.run_until_complete(worker(peers))
   except KeyboardInterrupt:
     print('\rshutting down...')
 
@@ -314,11 +342,54 @@ def start(port, my_peer_id):
   loop.close()
 
 
+def leech(torr, addr):
+  '''Download the given torrent from the given peers.'''
+
+  # The event loop
+  loop = asyncio.get_event_loop()
+
+  # List of all peers to which we are connected
+  peers = []
+
+  # Mapping from infohash to file-object
+  files = dict()
+
+  # Create the connection coroutine
+  coro = loop.create_connection(lambda: PeerWireProtocol(peers, files, [], torr), host=addr[0], port=addr[1])
+
+  trans, proto = loop.run_until_complete(coro)
+
+  try:
+    x = loop.run_until_complete(worker(peers))
+  except KeyboardInterrupt:
+    print('\rshutting down...')
+
+  # Close all files
+  for f in files.values():
+    f.close()
+
+  # Close the connection
+  trans.close()
+
+  # Close the event loop
+  loop.close()
+
+
 def main():
   import sys
 
   port = 6881
   my_peer_id  = b'1' * 20
+
+  if sys.argv[1] == 'leech':
+    torr = torrent.read_torrent_file(sys.argv[2])
+    addr = sys.argv[3]
+
+    leech(torr, (addr, port))
+
+  elif sys.argv[1] == 'seed':
+    start(port, my_peer_id)
+
 
   # Parse Options
   for arg in sys.argv[1:]:
@@ -327,9 +398,6 @@ def main():
 
     if arg.startswith('--port'):
       port = int(arg[6:])
-
-  # Start the server
-  start(port, my_peer_id)
 
 if __name__ == '__main__':
   main()

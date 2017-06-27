@@ -5,7 +5,7 @@ A server that seeds torrents
 '''
 
 # Stdlib
-import asyncio, logging, os, sys, math
+import asyncio, logging, hashlib, os, sys, math
 
 # Project
 import torrent, pwp

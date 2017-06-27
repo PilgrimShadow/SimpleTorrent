@@ -119,7 +119,7 @@ class PeerWireProtocol(asyncio.Protocol):
 
       # Open the file if necessary
       if self.infohash not in self.files:
-        self.files[self.infohash] = open('files/' + self.torr['info']['name'], 'rb+')
+        self.files[self.infohash] = open('files/' + self.torr['info']['name'], 'rb' if len(self.pieces)==0 else 'wb+')
 
       self.file = self.files[self.infohash]
 

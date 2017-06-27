@@ -147,11 +147,8 @@ def request_all(file_size):
   return b''.join( request(i, j*block_size, block_size) for i in range(num_whole_pieces) for j in range(blocks_per_piece) ) + t + v
 
  
-def request_piece(index, file_len):
+def request_piece(index, file_len, piece_size=2**18, block_size=2**14):
   '''Request an entire piece'''
-
-  piece_size = 2**18
-  block_size = 2**14
 
   net_offset = index * piece_size
   reqs = []

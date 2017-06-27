@@ -28,9 +28,9 @@ def bytestring_to_set(bytestring):
 # Configure the logger
 logging.basicConfig(
   level=logging.DEBUG,
-  datefmt='%Y/%m/%d',
+  datefmt='%Y/%m/%d %H:%M:%S',
   format='%(asctime)s %(name)s %(message)s',
-  filename='async_seeder.log'
+  filename='server_log.txt'
 )
 
 class PeerWireProtocol(asyncio.Protocol):
@@ -58,10 +58,14 @@ class PeerWireProtocol(asyncio.Protocol):
     # Torrent identifier
     self.infohash = None
 
+    # The pieces we are missing
+    self.pieces = None
+
     # Are we seeking a particular torrent?
     if seeking is not None:
       self.torr = seeking
       self.infohash = torrent.infohash(seeking)
+      self.pieces = dict()
 
     # The message parser for this connection
     self.parser = pwp.MessageParser()
@@ -102,9 +106,20 @@ class PeerWireProtocol(asyncio.Protocol):
           self.transport.close()
           return
 
+      # Details about pieces and blocks for this torrent
+      self.blocks_expected = int(math.ceil(self.torr['info']['length'] / 2**14))
+      self.pieces_expected = int(math.ceil(self.torr['info']['length'] / self.torr['info']['piece length']))
+      self.blocks_per_piece = int(self.torr['info']['piece length'] / 2**14)
+      self.blocks_in_last_piece = self.blocks_expected % self.blocks_per_piece
+
+      if self.pieces is not None:
+        self.pieces = { i : set() for i in range(self.pieces_expected) }
+      else:
+        self.pieces = dict()
+
       # Open the file if necessary
       if self.infohash not in self.files:
-        self.files[self.infohash] = open('files/' + self.torr['info']['name'], 'rb')
+        self.files[self.infohash] = open('files/' + self.torr['info']['name'], 'rb+')
 
       self.file = self.files[self.infohash]
 
@@ -128,7 +143,10 @@ class PeerWireProtocol(asyncio.Protocol):
         'transport': self.transport, 'queue': self.queue,
         'peer_choking': True, 'am_choking': True,
         'peer_interested': False, 'am_interested': False,
-        'peer_has': set(), 'torr': self.torr, 'file': self.file}
+        'peer_has': set(), 'torr': self.torr, 'file': self.file,
+        'blocks_expected': self.blocks_expected, 'pieces_expected': self.pieces_expected,
+        'blocks_per_piece': self.blocks_per_piece, 'blocks_in_last_piece': self.blocks_in_last_piece,
+        'pieces': self.pieces}
 
       # Add this peer to the list
       self.peers.append(peer_info)
@@ -277,8 +295,43 @@ async def worker(peers, n=10, sleep=0.001):
           peer['transport'].write(pwp.piece(msg['payload']['index'], msg['payload']['begin'], block))
 
         elif msg['id'] == 7:
+
           print('received piece')
 
+          index = msg['payload']['index']
+
+          # We don't need this block
+          if index not in peer['pieces']:
+            continue
+
+          # Add the block to our collection
+          peer['pieces'][index].add((msg['payload']['begin'], msg['payload']['block']))
+
+          # Assemble the piece if all blocks have arrived
+          if (index == peer['pieces_expected']-1 and len(peer['pieces'][index]) == peer['blocks_in_last_piece']) or len(peer['pieces'][index]) == peer['blocks_per_piece']:
+
+            offset = index * peer['torr']['info']['piece length']
+            assembled = b''.join(block[1] for block in sorted(peer['pieces'][index]))
+
+            # If the piece is valid...
+            if hashlib.sha1(assembled).digest() == peer['torr']['info']['pieces'][20 * index: 20 * (index+1)]:
+
+              # Save the piece to disk
+              peer['file'].seek(offset)
+              peer['file'].write(assembled)
+
+              # This piece is no longer needed
+              del peer['pieces'][index]
+
+              # Send 'have' message to peer
+              peer['transport'].write(pwp.have(index))
+            else:
+
+              # Discard all blocks of the invalid piece
+              pieces[index] = set()
+
+              # Re-request the invalid piece
+              peer['transport'].write(pwp.request_piece(index, peer['torr']['info']['length'], peer['torr']['info']['piece length']))
 
     # Clear data for all closed connections
     for i in closed:
